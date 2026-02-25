@@ -8,18 +8,23 @@ from data_loader import load_atp_data, chunk_matches_to_text
 INDEX_DIR = os.path.join(os.path.dirname(__file__), "data", "index")
 
 model = None
+model_ready = False
 chunks = []
 embeddings_cache = None
 bm25 = None
 df_global = None
 ready = False
 
-def _get_model():
-    global model
-    if model is None:
+def _load_model():
+    global model, model_ready
+    try:
         from sentence_transformers import SentenceTransformer
         model = SentenceTransformer("all-MiniLM-L6-v2")
-    return model
+        model_ready = True
+        print("Embedding model loaded.")
+    except Exception as e:
+        print(f"Could not load embedding model: {e}")
+        print("Retrieval will use BM25-only mode.")
 
 def _index_files_exist():
     files = ["chunks.json", "embeddings.npy", "bm25.pkl"]
@@ -38,6 +43,7 @@ def build_index():
             bm25 = pickle.load(f)
         ready = True
         print(f"Loaded index with {len(chunks)} match records.")
+        _load_model()
         return
 
     from rank_bm25 import BM25Okapi
@@ -158,30 +164,29 @@ def retrieve(query, top_k=15):
     if len(filtered_indices) <= 50:
         return [chunks[i] for i in filtered_indices]
 
-    # Try hybrid retrieval (dense + sparse), fall back to BM25-only
-    try:
-        import faiss
-        from rank_bm25 import BM25Okapi
-
-        query_embedding = _get_model().encode([query]).astype("float32")
-
-        filtered_embeddings = embeddings_cache[filtered_indices]
-        temp_index = faiss.IndexFlatL2(filtered_embeddings.shape[1])
-        temp_index.add(filtered_embeddings)
-        _, dense_positions = temp_index.search(query_embedding, min(top_k, len(filtered_indices)))
-        dense_indices = [filtered_indices[p] for p in dense_positions[0]]
-
-        tokenized_query = query.lower().split()
-        if tourney:
-            filtered_tokenized = [chunks[i].lower().split() for i in filtered_indices]
-            filtered_bm25 = BM25Okapi(filtered_tokenized)
-            sparse_scores = filtered_bm25.get_scores(tokenized_query)
-        else:
-            sparse_scores = bm25.get_scores(tokenized_query)
-        sparse_top = np.argsort(sparse_scores)[::-1][:top_k]
-        sparse_indices = [filtered_indices[p] for p in sparse_top]
-
-        combined = reciprocal_rank_fusion(dense_indices, sparse_indices)
-        return [chunks[i] for i in combined[:top_k]]
-    except Exception:
+    if not model_ready:
         return _bm25_only(filtered_indices, query, top_k)
+
+    import faiss
+    from rank_bm25 import BM25Okapi
+
+    query_embedding = model.encode([query]).astype("float32")
+
+    filtered_embeddings = embeddings_cache[filtered_indices]
+    temp_index = faiss.IndexFlatL2(filtered_embeddings.shape[1])
+    temp_index.add(filtered_embeddings)
+    _, dense_positions = temp_index.search(query_embedding, min(top_k, len(filtered_indices)))
+    dense_indices = [filtered_indices[p] for p in dense_positions[0]]
+
+    tokenized_query = query.lower().split()
+    if tourney:
+        filtered_tokenized = [chunks[i].lower().split() for i in filtered_indices]
+        filtered_bm25 = BM25Okapi(filtered_tokenized)
+        sparse_scores = filtered_bm25.get_scores(tokenized_query)
+    else:
+        sparse_scores = bm25.get_scores(tokenized_query)
+    sparse_top = np.argsort(sparse_scores)[::-1][:top_k]
+    sparse_indices = [filtered_indices[p] for p in sparse_top]
+
+    combined = reciprocal_rank_fusion(dense_indices, sparse_indices)
+    return [chunks[i] for i in combined[:top_k]]
