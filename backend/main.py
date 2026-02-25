@@ -16,9 +16,17 @@ async def lifespan(app):
 
 app = FastAPI(lifespan=lifespan)
 
+origins = [
+    "http://localhost:5173",
+    "https://atpinsight.vercel.app",
+]
+extra_origin = os.getenv("CORS_ORIGIN")
+if extra_origin:
+    origins.append(extra_origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "https://atpinsight.vercel.app"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

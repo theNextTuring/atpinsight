@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: atpinsight-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    plan: free
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ACCESS_CODE
+        sync: false
+      - key: CORS_ORIGIN
+        value: https://atpinsight.vercel.app
+      - key: PYTHON_VERSION
+        value: "3.12"

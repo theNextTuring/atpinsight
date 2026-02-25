@@ -1,29 +1,66 @@
+import json
+import os
+import pickle
+
 import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
 from data_loader import load_atp_data, chunk_matches_to_text
 
-model = SentenceTransformer("all-MiniLM-L6-v2")
+INDEX_DIR = os.path.join(os.path.dirname(__file__), "data", "index")
 
+model = None
 chunks = []
 embeddings_cache = None
 bm25 = None
 df_global = None
 
+def _get_model():
+    global model
+    if model is None:
+        model = SentenceTransformer("all-MiniLM-L6-v2")
+    return model
+
+def _index_files_exist():
+    files = ["chunks.json", "embeddings.npy", "bm25.pkl"]
+    return all(os.path.exists(os.path.join(INDEX_DIR, f)) for f in files)
+
 def build_index():
     global chunks, embeddings_cache, bm25, df_global
     df_global = load_atp_data()
-    chunks = chunk_matches_to_text(df_global)
-    print(f"Building index over {len(chunks)} match records...")
 
-    embeddings_cache = model.encode(chunks, show_progress_bar=True)
+    if _index_files_exist():
+        print("Loading pre-built index from disk...")
+        with open(os.path.join(INDEX_DIR, "chunks.json")) as f:
+            chunks = json.load(f)
+        embeddings_cache = np.load(os.path.join(INDEX_DIR, "embeddings.npy"))
+        with open(os.path.join(INDEX_DIR, "bm25.pkl"), "rb") as f:
+            bm25 = pickle.load(f)
+        print(f"Loaded index with {len(chunks)} match records.")
+        return
+
+    print(f"No pre-built index found. Building from scratch...")
+    chunks = chunk_matches_to_text(df_global)
+    print(f"Encoding {len(chunks)} match records...")
+
+    embeddings_cache = _get_model().encode(chunks, show_progress_bar=True)
     embeddings_cache = np.array(embeddings_cache).astype("float32")
 
     tokenized = [chunk.lower().split() for chunk in chunks]
     bm25 = BM25Okapi(tokenized)
 
-    print("Index built successfully.")
+    save_index()
+    print("Index built and saved.")
+
+def save_index():
+    os.makedirs(INDEX_DIR, exist_ok=True)
+    with open(os.path.join(INDEX_DIR, "chunks.json"), "w") as f:
+        json.dump(chunks, f)
+    np.save(os.path.join(INDEX_DIR, "embeddings.npy"), embeddings_cache)
+    with open(os.path.join(INDEX_DIR, "bm25.pkl"), "wb") as f:
+        pickle.dump(bm25, f)
+    print(f"Index saved to {INDEX_DIR}")
 
 def reciprocal_rank_fusion(dense_indices, sparse_indices, k=60):
     """Combine dense and sparse results using RRF scoring."""
@@ -104,7 +141,7 @@ def retrieve(query, top_k=15):
     if len(filtered_indices) <= 50:
         return [chunks[i] for i in filtered_indices]
 
-    query_embedding = model.encode([query]).astype("float32")
+    query_embedding = _get_model().encode([query]).astype("float32")
 
     # Dense retrieval using cached embeddings
     filtered_embeddings = embeddings_cache[filtered_indices]
