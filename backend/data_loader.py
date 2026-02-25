@@ -19,6 +19,22 @@ def load_atp_data():
     ]
     df = df[[c for c in cols if c in df.columns]]
     df = df.dropna(subset=["winner_name", "loser_name", "score"])
+    df = normalize_tournament_names(df)
+    return df
+
+TOURNAMENT_ALIASES = {
+    "Monte-Carlo": "Monte Carlo Masters",
+}
+
+def normalize_tournament_names(df):
+    def normalize(name):
+        if pd.isna(name):
+            return name
+        for alias, standard in TOURNAMENT_ALIASES.items():
+            if alias.lower() in name.lower():
+                return standard
+        return name
+    df["tourney_name"] = df["tourney_name"].apply(normalize)
     return df
 
 def chunk_matches_to_text(df):

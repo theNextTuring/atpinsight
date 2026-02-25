@@ -3,7 +3,12 @@ import ChatWindow from "./components/ChatWindow"
 import InputBar from "./components/InputBar"
 import "./index.css"
 
+const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"
+
 export default function App() {
+  const [accessCode, setAccessCode] = useState("")
+  const [authenticated, setAuthenticated] = useState(false)
+  const [authError, setAuthError] = useState(false)
   const [messages, setMessages] = useState([
     {
       role: "assistant",
@@ -12,25 +17,63 @@ export default function App() {
   ])
   const [loading, setLoading] = useState(false)
 
+  async function handleAuth() {
+    // Test the code against the backend
+    try {
+      const res = await fetch(`${API_URL}/ask`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: "test", access_code: accessCode })
+      })
+      if (res.status === 401) {
+        setAuthError(true)
+      } else {
+        setAuthenticated(true)
+        setAuthError(false)
+      }
+    } catch {
+      setAuthError(true)
+    }
+  }
+
   async function handleSubmit(question) {
     if (!question.trim()) return
-
     setMessages(prev => [...prev, { role: "user", text: question }])
     setLoading(true)
 
     try {
-      const res = await fetch("http://127.0.0.1:8000/ask", {
+      const res = await fetch(`${API_URL}/ask`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question })
+        body: JSON.stringify({ question, access_code: accessCode })
       })
       const data = await res.json()
       setMessages(prev => [...prev, { role: "assistant", text: data.answer }])
-    } catch (err) {
-      setMessages(prev => [...prev, { role: "assistant", text: "Error connecting to backend. Make sure the server is running." }])
+    } catch {
+      setMessages(prev => [...prev, { role: "assistant", text: "Error connecting to backend." }])
     }
-
     setLoading(false)
+  }
+
+  if (!authenticated) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-box">
+          <div className="logo">🎾 ATPInsight</div>
+          <p className="auth-subtitle">Enter access code to continue</p>
+          <input
+            type="password"
+            placeholder="Access code"
+            value={accessCode}
+            onChange={e => setAccessCode(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && handleAuth()}
+            className="auth-input"
+          />
+          {authError && <p className="auth-error">Invalid access code</p>}
+          <button onClick={handleAuth} className="auth-button">Enter</button>
+        </div>
+      </div>
+    )
   }
 
   return (
