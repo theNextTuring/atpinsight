@@ -1,3 +1,4 @@
+import threading
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -5,13 +6,14 @@ from pydantic import BaseModel
 import anthropic
 import os
 from dotenv import load_dotenv
-from rag_pipeline import build_index, retrieve, is_aggregation_query, analytical_query
+import rag_pipeline
 
 load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app):
-    build_index()
+    thread = threading.Thread(target=rag_pipeline.build_index, daemon=True)
+    thread.start()
     yield
 
 app = FastAPI(lifespan=lifespan)
@@ -44,8 +46,11 @@ def ask(request: QueryRequest):
     if request.access_code != ACCESS_CODE:
         raise HTTPException(status_code=401, detail="Invalid access code")
 
-    if is_aggregation_query(request.question):
-        summary, context = analytical_query(request.question)
+    if not rag_pipeline.ready:
+        return {"answer": "ATPInsight is warming up — please try again in a few seconds.", "sources": []}
+
+    if rag_pipeline.is_aggregation_query(request.question):
+        summary, context = rag_pipeline.analytical_query(request.question)
         if summary:
             message = client.messages.create(
                 model="claude-haiku-4-5-20251001",
@@ -59,7 +64,7 @@ Answer in ONE concise sentence. No tables, no bullet points, no explanation unle
             )
             return {"answer": message.content[0].text, "sources": context}
 
-    context_chunks = retrieve(request.question)
+    context_chunks = rag_pipeline.retrieve(request.question)
     context = "\n".join(context_chunks)
     message = client.messages.create(
         model="claude-haiku-4-5-20251001",

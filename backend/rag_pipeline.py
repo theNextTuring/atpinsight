@@ -2,10 +2,7 @@ import json
 import os
 import pickle
 
-import faiss
 import numpy as np
-from sentence_transformers import SentenceTransformer
-from rank_bm25 import BM25Okapi
 from data_loader import load_atp_data, chunk_matches_to_text
 
 INDEX_DIR = os.path.join(os.path.dirname(__file__), "data", "index")
@@ -15,10 +12,12 @@ chunks = []
 embeddings_cache = None
 bm25 = None
 df_global = None
+ready = False
 
 def _get_model():
     global model
     if model is None:
+        from sentence_transformers import SentenceTransformer
         model = SentenceTransformer("all-MiniLM-L6-v2")
     return model
 
@@ -27,7 +26,7 @@ def _index_files_exist():
     return all(os.path.exists(os.path.join(INDEX_DIR, f)) for f in files)
 
 def build_index():
-    global chunks, embeddings_cache, bm25, df_global
+    global chunks, embeddings_cache, bm25, df_global, ready
     df_global = load_atp_data()
 
     if _index_files_exist():
@@ -37,10 +36,13 @@ def build_index():
         embeddings_cache = np.load(os.path.join(INDEX_DIR, "embeddings.npy"))
         with open(os.path.join(INDEX_DIR, "bm25.pkl"), "rb") as f:
             bm25 = pickle.load(f)
+        ready = True
         print(f"Loaded index with {len(chunks)} match records.")
         return
 
-    print(f"No pre-built index found. Building from scratch...")
+    from rank_bm25 import BM25Okapi
+
+    print("No pre-built index found. Building from scratch...")
     chunks = chunk_matches_to_text(df_global)
     print(f"Encoding {len(chunks)} match records...")
 
@@ -51,6 +53,7 @@ def build_index():
     bm25 = BM25Okapi(tokenized)
 
     save_index()
+    ready = True
     print("Index built and saved.")
 
 def save_index():
@@ -140,6 +143,9 @@ def retrieve(query, top_k=15):
 
     if len(filtered_indices) <= 50:
         return [chunks[i] for i in filtered_indices]
+
+    import faiss
+    from rank_bm25 import BM25Okapi
 
     query_embedding = _get_model().encode([query]).astype("float32")
 
