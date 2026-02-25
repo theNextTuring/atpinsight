@@ -37,9 +37,18 @@ app.add_middleware(
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 ACCESS_CODE = os.getenv("ACCESS_CODE")
 
+class AccessRequest(BaseModel):
+    access_code: str
+
 class QueryRequest(BaseModel):
     question: str
     access_code: str
+
+@app.post("/verify")
+def verify(request: AccessRequest):
+    if request.access_code != ACCESS_CODE:
+        raise HTTPException(status_code=401, detail="Invalid access code")
+    return {"status": "ok"}
 
 @app.post("/ask")
 def ask(request: QueryRequest):

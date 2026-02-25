@@ -18,12 +18,11 @@ export default function App() {
   const [loading, setLoading] = useState(false)
 
   async function handleAuth() {
-    // Test the code against the backend
     try {
-      const res = await fetch(`${API_URL}/ask`, {
+      const res = await fetch(`${API_URL}/verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: "test", access_code: accessCode })
+        body: JSON.stringify({ access_code: accessCode })
       })
       if (res.status === 401) {
         setAuthError(true)

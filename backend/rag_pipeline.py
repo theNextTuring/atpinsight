@@ -130,6 +130,20 @@ def analytical_query(query):
     context = [f"{top_player} defeated {m['loser_name']} in the {m['round']} with score {m['score']}" for m in top_matches]
     return summary, context
 
+def _bm25_only(filtered_indices, query, top_k):
+    """Fallback retrieval using only BM25 (no dense embeddings needed)."""
+    from rank_bm25 import BM25Okapi
+
+    tokenized_query = query.lower().split()
+    if len(filtered_indices) < len(chunks):
+        filtered_tokenized = [chunks[i].lower().split() for i in filtered_indices]
+        filtered_bm25 = BM25Okapi(filtered_tokenized)
+        scores = filtered_bm25.get_scores(tokenized_query)
+    else:
+        scores = bm25.get_scores(tokenized_query)
+    top = np.argsort(scores)[::-1][:top_k]
+    return [chunks[filtered_indices[p]] for p in top]
+
 def retrieve(query, top_k=15):
     tourney = get_tournament_name(query)
 
@@ -144,28 +158,30 @@ def retrieve(query, top_k=15):
     if len(filtered_indices) <= 50:
         return [chunks[i] for i in filtered_indices]
 
-    import faiss
-    from rank_bm25 import BM25Okapi
+    # Try hybrid retrieval (dense + sparse), fall back to BM25-only
+    try:
+        import faiss
+        from rank_bm25 import BM25Okapi
 
-    query_embedding = _get_model().encode([query]).astype("float32")
+        query_embedding = _get_model().encode([query]).astype("float32")
 
-    # Dense retrieval using cached embeddings
-    filtered_embeddings = embeddings_cache[filtered_indices]
-    temp_index = faiss.IndexFlatL2(filtered_embeddings.shape[1])
-    temp_index.add(filtered_embeddings)
-    _, dense_positions = temp_index.search(query_embedding, min(top_k, len(filtered_indices)))
-    dense_indices = [filtered_indices[p] for p in dense_positions[0]]
+        filtered_embeddings = embeddings_cache[filtered_indices]
+        temp_index = faiss.IndexFlatL2(filtered_embeddings.shape[1])
+        temp_index.add(filtered_embeddings)
+        _, dense_positions = temp_index.search(query_embedding, min(top_k, len(filtered_indices)))
+        dense_indices = [filtered_indices[p] for p in dense_positions[0]]
 
-    # Sparse BM25 retrieval
-    tokenized_query = query.lower().split()
-    if tourney:
-        filtered_tokenized = [chunks[i].lower().split() for i in filtered_indices]
-        filtered_bm25 = BM25Okapi(filtered_tokenized)
-        sparse_scores = filtered_bm25.get_scores(tokenized_query)
-    else:
-        sparse_scores = bm25.get_scores(tokenized_query)
-    sparse_top = np.argsort(sparse_scores)[::-1][:top_k]
-    sparse_indices = [filtered_indices[p] for p in sparse_top]
+        tokenized_query = query.lower().split()
+        if tourney:
+            filtered_tokenized = [chunks[i].lower().split() for i in filtered_indices]
+            filtered_bm25 = BM25Okapi(filtered_tokenized)
+            sparse_scores = filtered_bm25.get_scores(tokenized_query)
+        else:
+            sparse_scores = bm25.get_scores(tokenized_query)
+        sparse_top = np.argsort(sparse_scores)[::-1][:top_k]
+        sparse_indices = [filtered_indices[p] for p in sparse_top]
 
-    combined = reciprocal_rank_fusion(dense_indices, sparse_indices)
-    return [chunks[i] for i in combined[:top_k]]
+        combined = reciprocal_rank_fusion(dense_indices, sparse_indices)
+        return [chunks[i] for i in combined[:top_k]]
+    except Exception:
+        return _bm25_only(filtered_indices, query, top_k)
